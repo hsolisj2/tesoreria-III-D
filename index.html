@@ -428,19 +428,34 @@
 <div class="modal-overlay" id="modal-grad"><div class="modal">
   <h3>🎓 Registrar pago graduación</h3>
   <div class="form-field"><label>Alumno</label><select id="mg2-alumno"></select></div>
-  <div class="form-field"><label>Plan de pago</label>
-    <select id="mg2-plan" onchange="updateGradPlan()">
-      <option value="6">Plan A — 6 cuotas de $50.000</option>
-      <option value="2">Plan B — 2 cuotas de $150.000</option>
-    </select>
-  </div>
-  <div class="form-field"><label>N° cuota</label><select id="mg2-ncuota"></select></div>
-  <div class="form-field"><label>Monto ($)</label><input id="mg2-monto" type="number" readonly style="background:#f5f5f5"></div>
+  <div id="mg2-plan-info" style="background:#eef2f9;border-radius:10px;padding:11px 14px;font-size:.82rem;color:var(--navy);margin-bottom:14px;display:none"></div>
+  <div class="form-field"><label>Monto pagado ($)</label><input id="mg2-monto" type="number" placeholder="0"></div>
   <div class="form-field"><label>Fecha</label><input id="mg2-fecha" type="date"></div>
-  <div class="form-field"><label>Notas (opcional)</label><input id="mg2-notas"></div>
+  <div class="form-field"><label>Notas (opcional)</label><input id="mg2-notas" placeholder="ej: 3ª cuota, pagó en efectivo"></div>
   <div class="modal-actions">
     <button class="btn-ghost" onclick="closeModal('modal-grad')">Cancelar</button>
     <button class="btn-primary" onclick="saveGradPago()">Guardar</button>
+  </div>
+</div></div>
+
+<div class="modal-overlay" id="modal-plan"><div class="modal">
+  <h3>🎯 Asignar plan de graduación</h3>
+  <p style="color:var(--gray);font-size:.85rem;margin-bottom:16px">Elige el plan del apoderado. No es necesario que haya pagado aún — solo marca qué modalidad eligió.</p>
+  <div class="form-field"><label>Alumno</label><select id="mpl-alumno"></select></div>
+  <div class="form-field"><label>Plan elegido</label>
+    <select id="mpl-plan">
+      <option value="">— Sin plan asignado —</option>
+      <option value="A">Plan A · 6 cuotas de $50.000</option>
+      <option value="B">Plan B · 2 cuotas de $150.000</option>
+      <option value="C">Plan Libre · monto y cuotas variables</option>
+    </select>
+  </div>
+  <div style="background:#fef3cc;border-radius:10px;padding:11px 14px;font-size:.8rem;color:#8a6200;margin-bottom:4px">
+    💡 El total a reunir es $300.000 por alumno en cualquier plan. El Plan Libre permite cualquier cantidad de cuotas y montos.
+  </div>
+  <div class="modal-actions">
+    <button class="btn-ghost" onclick="closeModal('modal-plan')">Cancelar</button>
+    <button class="btn-primary" onclick="savePlan()">Guardar</button>
   </div>
 </div></div>
 
@@ -619,6 +634,7 @@ const defaultData = {
   saldoInicialDesc: '',
   ingresosExtras: [],
   cuotasGrad: [],
+  planesGrad: {},
   log: []
 };
 
@@ -679,7 +695,8 @@ function flattenDB(data) {
     log:            JSON.stringify((data.log || []).slice(0, 100)),
     saldoInicial:   data.saldoInicial || 0,
     saldoInicialDesc: data.saldoInicialDesc || '',
-    cuotasGrad:      JSON.stringify(data.cuotasGrad || [])
+    cuotasGrad:      JSON.stringify(data.cuotasGrad || []),
+    planesGrad:      JSON.stringify(data.planesGrad || {})
   };
 }
 
@@ -700,7 +717,8 @@ function migrateData(data) {
     log:             parse(data.log,       []),
     saldoInicial:    Number(data.saldoInicial || 0),
     saldoInicialDesc: data.saldoInicialDesc || '',
-    cuotasGrad:      parse(data.cuotasGrad, [])
+    cuotasGrad:      parse(data.cuotasGrad, []),
+    planesGrad:      parse(data.planesGrad, {})
   };
 }
 
@@ -1457,37 +1475,40 @@ function downloadCSV(rows, filename) {
 // ═══════════════════════════════════════════════
 //  GRADUACIÓN
 // ═══════════════════════════════════════════════
-const PLAN_A = { cuotas: 6, monto: 50000, label: 'Plan A (6×$50.000)' };
-const PLAN_B = { cuotas: 2, monto: 150000, label: 'Plan B (2×$150.000)' };
+const PLAN_A = { cuotas: 6, monto: 50000, label: 'Plan A · 6×$50.000' };
+const PLAN_B = { cuotas: 2, monto: 150000, label: 'Plan B · 2×$150.000' };
 const TOTAL_GRAD = 300000;
 
+// El plan se guarda en DB.planesGrad[alumnoId] = 'A' | 'B' | 'C'
+// Los pagos se guardan en DB.cuotasGrad (cada uno con su monto)
 function getPlanAlumno(alumnoId) {
-  // Detectar plan según pagos existentes
-  const pagos = (DB.cuotasGrad||[]).filter(p=>p.alumnoId===alumnoId);
-  if (!pagos.length) return null;
-  return pagos[0].plan; // 'A' o 'B'
+  return (DB.planesGrad && DB.planesGrad[alumnoId]) || null;
+}
+function planLabel(plan) {
+  return plan==='A' ? PLAN_A.label : plan==='B' ? PLAN_B.label : plan==='C' ? 'Plan Libre' : 'Sin plan';
 }
 
 function renderGraduacion() {
   document.getElementById('grad-locked').style.display = isDelegate?'none':'flex';
   document.getElementById('grad-actions').innerHTML = isDelegate
-    ? `<button class="btn-primary" onclick="openGradModal()">+ Registrar pago graduación</button>` : '';
+    ? `<button class="btn-primary" onclick="openGradModal()">+ Registrar pago graduación</button>
+       <button class="btn-ghost" style="margin-left:8px" onclick="openPlanModal()">🎯 Asignar plan a alumno</button>` : '';
 
   const totalRecaudado = (DB.cuotasGrad||[]).reduce((s,p)=>s+Number(p.monto),0);
   const totalEsperado  = DB.alumnos.length * TOTAL_GRAD;
   const pct = totalEsperado ? Math.round(totalRecaudado/totalEsperado*100) : 0;
 
-  // Resumen tarjetas
   const planAcount = DB.alumnos.filter(a=>getPlanAlumno(a.id)==='A').length;
   const planBcount = DB.alumnos.filter(a=>getPlanAlumno(a.id)==='B').length;
-  const sinPlan    = DB.alumnos.length - planAcount - planBcount;
+  const planCcount = DB.alumnos.filter(a=>getPlanAlumno(a.id)==='C').length;
+  const sinPlan    = DB.alumnos.length - planAcount - planBcount - planCcount;
 
   document.getElementById('grad-resumen').innerHTML = `
     <div class="stats-grid">
       <div class="stat-card"><div class="label">Total recaudado</div><div class="value gold">${fmt(totalRecaudado)}</div><div class="sub">de ${fmt(totalEsperado)} esperado</div></div>
-      <div class="stat-card"><div class="label">Plan A (6 cuotas)</div><div class="value">${planAcount}</div><div class="sub">apoderados</div></div>
-      <div class="stat-card"><div class="label">Plan B (2 cuotas)</div><div class="value">${planBcount}</div><div class="sub">apoderados</div></div>
-      <div class="stat-card"><div class="label">Sin plan aún</div><div class="value red">${sinPlan}</div><div class="sub">sin pagos</div></div>
+      <div class="stat-card"><div class="label">Plan A · Plan B</div><div class="value">${planAcount} · ${planBcount}</div><div class="sub">6 cuotas · 2 cuotas</div></div>
+      <div class="stat-card"><div class="label">Plan Libre</div><div class="value">${planCcount}</div><div class="sub">monto variable</div></div>
+      <div class="stat-card"><div class="label">Sin plan aún</div><div class="value red">${sinPlan}</div><div class="sub">no han elegido</div></div>
     </div>
     <div style="margin-top:16px;background:var(--border);border-radius:8px;height:10px;overflow:hidden">
       <div style="height:100%;border-radius:8px;background:var(--gold);width:${pct}%"></div>
@@ -1497,62 +1518,126 @@ function renderGraduacion() {
   // Tabla por alumno
   const tbody = document.getElementById('tbl-grad');
   tbody.innerHTML = DB.alumnos.map(a => {
-    const pagosA = (DB.cuotasGrad||[]).filter(p=>p.alumnoId===a.id);
+    const pagosA = (DB.cuotasGrad||[]).filter(p=>p.alumnoId===a.id).sort((x,y)=>x.fecha.localeCompare(y.fecha));
     const plan = getPlanAlumno(a.id);
-    const planInfo = plan==='A' ? PLAN_A : plan==='B' ? PLAN_B : null;
     const totalPagado = pagosA.reduce((s,p)=>s+Number(p.monto),0);
-    const totalEsp = planInfo ? planInfo.cuotas * planInfo.monto : TOTAL_GRAD;
-    const pendiente = totalEsp - totalPagado;
+    const pendiente = TOTAL_GRAD - totalPagado;
     const cuotasPag = pagosA.length;
-    const cuotasTot = planInfo ? planInfo.cuotas : '—';
-    const ok = planInfo && pendiente <= 0;
+    let cuotasTot = '—';
+    if (plan==='A') cuotasTot = PLAN_A.cuotas;
+    else if (plan==='B') cuotasTot = PLAN_B.cuotas;
+    else if (plan==='C') cuotasTot = 'Libre';
+    const ok = plan && pendiente <= 0;
+    const badgeClass = plan==='A'?'badge-gold':plan==='B'?'badge-green':plan==='C'?'badge-gold':'badge-gray';
+
+    // Botón para ver/eliminar pagos individuales
+    const detallePagos = pagosA.length
+      ? pagosA.map(p => `<div style="font-size:.72rem;color:var(--gray);display:flex;align-items:center;gap:6px;margin-top:2px">
+          ${fmtDate(p.fecha)} · ${fmt(p.monto)}
+          ${isDelegate?`<span onclick="delGradPago(${p.id})" style="cursor:pointer;color:var(--red)" title="Eliminar este pago">🗑</span>`:''}
+        </div>`).join('')
+      : '';
 
     return `<tr>
-      <td><strong>${a.nombre}</strong></td>
-      <td>${planInfo ? `<span class="badge ${plan==='A'?'badge-gold':'badge-green'}">${planInfo.label}</span>` : '<span class="badge badge-gray">Sin plan</span>'}</td>
-      <td>${planInfo ? `${cuotasPag} / ${cuotasTot}` : '—'}</td>
+      <td><strong>${a.nombre}</strong>${detallePagos}</td>
+      <td><span class="badge ${badgeClass}">${planLabel(plan)}</span></td>
+      <td>${plan ? `${cuotasPag} / ${cuotasTot}` : (cuotasPag||'—')}</td>
       <td style="color:var(--green);font-weight:600">${fmt(totalPagado)}</td>
       <td style="color:${ok?'var(--green)':pendiente>0?'var(--red)':'var(--gray)'};font-weight:600">${ok?'✅ Al día':fmt(pendiente)}</td>
-      <td>${isDelegate && !ok ? `<button class="btn-ghost" style="padding:5px 10px;font-size:.78rem" onclick="openGradModal(${a.id})">+ Pago</button>` : ''}</td>
+      <td style="white-space:nowrap">
+        ${isDelegate && !ok ? `<button class="btn-ghost" style="padding:5px 9px;font-size:.75rem" onclick="openGradModal(${a.id})">+ Pago</button>` : ''}
+        ${isDelegate ? `<button class="btn-ghost" style="padding:5px 9px;font-size:.75rem" onclick="openPlanModal(${a.id})">🎯</button>` : ''}
+      </td>
     </tr>`;
   }).join('');
 }
 
+// ── Modal asignar/cambiar plan ──
+function openPlanModal(alumnoId) {
+  const sa = document.getElementById('mpl-alumno');
+  sa.innerHTML = DB.alumnos.map(a=>`<option value="${a.id}" ${a.id===alumnoId?'selected':''}>${a.nombre}</option>`).join('');
+  // preseleccionar plan actual
+  if (alumnoId) {
+    const actual = getPlanAlumno(alumnoId) || '';
+    document.getElementById('mpl-plan').value = actual;
+  } else {
+    document.getElementById('mpl-plan').value = '';
+  }
+  openModal('modal-plan');
+}
+function savePlan() {
+  const alumnoId = parseInt(document.getElementById('mpl-alumno').value);
+  const plan     = document.getElementById('mpl-plan').value;
+  if (!alumnoId) { alert('Selecciona un alumno'); return; }
+  if (!DB.planesGrad) DB.planesGrad = {};
+  if (plan === '') {
+    delete DB.planesGrad[alumnoId];
+    addLog(`Quitó plan de graduación a ${alumnoNombre(alumnoId)}`);
+  } else {
+    DB.planesGrad[alumnoId] = plan;
+    addLog(`Asignó ${planLabel(plan)} a ${alumnoNombre(alumnoId)}`);
+  }
+  saveData(); closeModal('modal-plan'); renderGraduacion(); renderResumen();
+}
+
+// ── Modal registrar pago ──
 function openGradModal(alumnoId) {
   const sa = document.getElementById('mg2-alumno');
   sa.innerHTML = DB.alumnos.map(a=>`<option value="${a.id}" ${a.id===alumnoId?'selected':''}>${a.nombre}</option>`).join('');
   document.getElementById('mg2-fecha').value = today();
   document.getElementById('mg2-notas').value = '';
-  updateGradPlan();
+  document.getElementById('mg2-alumno').onchange = updateGradModalForAlumno;
+  updateGradModalForAlumno();
   openModal('modal-grad');
 }
 
-function updateGradPlan() {
-  const plan = document.getElementById('mg2-plan').value;
-  const info = plan==='6' ? PLAN_A : PLAN_B;
-  const sel = document.getElementById('mg2-ncuota');
-  sel.innerHTML = Array.from({length:info.cuotas},(_,i)=>`<option value="${i+1}">${i+1}ª cuota</option>`).join('');
-  document.getElementById('mg2-monto').value = info.monto;
+function updateGradModalForAlumno() {
+  const alumnoId = parseInt(document.getElementById('mg2-alumno').value);
+  const plan = getPlanAlumno(alumnoId);
+  const infoBox = document.getElementById('mg2-plan-info');
+  const montoInput = document.getElementById('mg2-monto');
+
+  if (plan === 'A' || plan === 'B') {
+    const info = plan==='A' ? PLAN_A : PLAN_B;
+    infoBox.innerHTML = `Plan asignado: <strong>${info.label}</strong>. Monto sugerido por cuota: ${fmt(info.monto)}`;
+    infoBox.style.display = 'block';
+    montoInput.value = info.monto;
+    montoInput.readOnly = false;
+  } else if (plan === 'C') {
+    infoBox.innerHTML = `Plan asignado: <strong>Plan Libre</strong>. Ingresa el monto que pagó el apoderado.`;
+    infoBox.style.display = 'block';
+    montoInput.value = '';
+    montoInput.readOnly = false;
+  } else {
+    infoBox.innerHTML = `⚠️ Este alumno no tiene plan asignado. Puedes registrar el pago igual, o asignarle un plan primero con el botón 🎯.`;
+    infoBox.style.display = 'block';
+    montoInput.value = '';
+    montoInput.readOnly = false;
+  }
 }
 
 function saveGradPago() {
   const alumnoId = parseInt(document.getElementById('mg2-alumno').value);
-  const planN    = document.getElementById('mg2-plan').value;
-  const plan     = planN==='6' ? 'A' : 'B';
-  const ncuota   = parseInt(document.getElementById('mg2-ncuota').value);
   const monto    = parseFloat(document.getElementById('mg2-monto').value);
   const fecha    = document.getElementById('mg2-fecha').value;
   const notas    = document.getElementById('mg2-notas').value.trim();
-  if (!alumnoId || !fecha) { alert('Completa los campos'); return; }
+  if (!alumnoId) { alert('Selecciona un alumno'); return; }
+  if (!monto || monto <= 0) { alert('Ingresa un monto válido'); return; }
+  if (!fecha) { alert('Selecciona una fecha'); return; }
 
-  // Verificar que no exista ya esa cuota para ese alumno y plan
-  const existe = (DB.cuotasGrad||[]).find(p=>p.alumnoId===alumnoId && p.plan===plan && p.ncuota===ncuota);
-  if (existe) { alert(`La ${ncuota}ª cuota del ${plan==='A'?'Plan A':'Plan B'} ya fue registrada para este alumno`); return; }
-
+  const plan = getPlanAlumno(alumnoId) || '';
   if (!DB.cuotasGrad) DB.cuotasGrad = [];
-  DB.cuotasGrad.push({ id: Date.now(), alumnoId, plan, ncuota, monto, fecha, notas, registradoPor: currentUser });
-  addLog(`Registró cuota graduación: ${alumnoNombre(alumnoId)} — Plan ${plan} cuota ${ncuota}`);
+  const nCuota = (DB.cuotasGrad.filter(p=>p.alumnoId===alumnoId).length) + 1;
+  DB.cuotasGrad.push({ id: Date.now(), alumnoId, plan, ncuota: nCuota, monto, fecha, notas, registradoPor: currentUser });
+  addLog(`Registró pago graduación: ${alumnoNombre(alumnoId)} — ${fmt(monto)}`);
   saveData(); closeModal('modal-grad'); renderGraduacion(); renderResumen();
+}
+
+function delGradPago(id) {
+  if (!confirm('¿Eliminar este pago de graduación?')) return;
+  DB.cuotasGrad = (DB.cuotasGrad||[]).filter(p=>p.id!==id);
+  addLog('Eliminó un pago de graduación');
+  saveData(); renderGraduacion(); renderResumen();
 }
 
 // ═══════════════════════════════════════════════
